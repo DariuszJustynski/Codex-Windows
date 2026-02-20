@@ -61,45 +61,60 @@ function Resolve-CodexCliPath([string]$Explicit) {
     return (Resolve-Path $envOverride).Path
   }
 
+  # IMPORTANT: Node.js child_process.spawn() on Windows can only execute:
+  #   .exe  — native PE binary (best, no shell needed)
+  #   .cmd  — batch script (needs shell:true in spawn, patched by Patch-MainSpawn)
+  # It CANNOT execute:
+  #   .ps1  — PowerShell script (Get-Command "codex" returns this first!)
+  #   (no ext) — POSIX shell script (npm also creates this)
+  # We must filter to only .exe and .cmd candidates.
+
   $candidates = @()
 
-  # 1. Get-Command handles PATHEXT natively (.exe, .cmd, .bat)
-  foreach ($name in @("codex", "codex.cmd", "codex.exe")) {
+  # 1. Try to find the native vendor binary first (best option: no shell needed)
+  #    npm installs it at: node_modules/@openai/codex-win32-x64/vendor/.../codex.exe
+  try {
+    $npmRoot = (& npm root -g 2>$null).Trim()
+    if ($npmRoot) {
+      $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
+      # Check both direct and nested node_modules paths
+      $candidates += (Join-Path $npmRoot "@openai\codex\node_modules\@openai\codex-win32-x64\vendor\$arch\codex\codex.exe")
+      $candidates += (Join-Path $npmRoot "@openai\codex-win32-x64\vendor\$arch\codex\codex.exe")
+      $candidates += (Join-Path $npmRoot "@openai\codex\vendor\$arch\codex\codex.exe")
+      if ($arch -ne "x86_64-pc-windows-msvc") {
+        $candidates += (Join-Path $npmRoot "@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex\codex.exe")
+        $candidates += (Join-Path $npmRoot "@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex\codex.exe")
+        $candidates += (Join-Path $npmRoot "@openai\codex\vendor\x86_64-pc-windows-msvc\codex\codex.exe")
+      }
+    }
+  } catch {}
+
+  # 2. Get-Command for .exe and .cmd only (skip bare "codex" which returns .ps1)
+  foreach ($name in @("codex.exe", "codex.cmd")) {
     try {
       $cmd = Get-Command $name -ErrorAction Stop
       if ($cmd -and $cmd.Source) { $candidates += $cmd.Source }
     } catch {}
   }
 
-  # 2. where.exe as secondary lookup
-  foreach ($name in @("codex", "codex.cmd", "codex.exe")) {
+  # 3. where.exe as secondary lookup (.exe and .cmd only)
+  foreach ($name in @("codex.exe", "codex.cmd")) {
     try {
       $found = & where.exe $name 2>$null
       if ($found) { $candidates += $found }
     } catch {}
   }
 
-  # 3. Common npm global bin locations on Windows
+  # 4. Common npm global bin locations on Windows
   $candidates += @(
-    (Join-Path $env:APPDATA "npm\codex.cmd"),
     (Join-Path $env:APPDATA "npm\codex.exe"),
-    (Join-Path $env:LOCALAPPDATA "npm\codex.cmd"),
-    (Join-Path $env:LOCALAPPDATA "npm\codex.exe")
+    (Join-Path $env:APPDATA "npm\codex.cmd"),
+    (Join-Path $env:LOCALAPPDATA "npm\codex.exe"),
+    (Join-Path $env:LOCALAPPDATA "npm\codex.cmd")
   )
 
-  # 4. npm root -g vendor path (direct binary)
-  try {
-    $npmRoot = (& npm root -g 2>$null).Trim()
-    if ($npmRoot) {
-      $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
-      $candidates += (Join-Path $npmRoot "@openai\codex\vendor\$arch\codex\codex.exe")
-      $candidates += (Join-Path $npmRoot "@openai\codex\vendor\x86_64-pc-windows-msvc\codex\codex.exe")
-      $candidates += (Join-Path $npmRoot "@openai\codex\vendor\aarch64-pc-windows-msvc\codex\codex.exe")
-    }
-  } catch {}
-
-  # Deduplicate and test
-  $candidates = $candidates | Where-Object { $_ } | Select-Object -Unique
+  # Deduplicate, filter to only .exe/.cmd, and test
+  $candidates = $candidates | Where-Object { $_ -and ($_ -match '\.(exe|cmd)$') } | Select-Object -Unique
 
   foreach ($c in $candidates) {
     if (-not $c) { continue }
@@ -108,6 +123,9 @@ function Resolve-CodexCliPath([string]$Explicit) {
       try {
         $cmdDir = Split-Path $c -Parent
         $vendor = Join-Path $cmdDir "node_modules\@openai\codex\vendor"
+        if (-not (Test-Path $vendor)) {
+          $vendor = Join-Path $cmdDir "node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor"
+        }
         if (Test-Path $vendor) {
           $found = Get-ChildItem -Recurse -Filter "codex.exe" $vendor -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($found) { return (Resolve-Path $found.FullName).Path }
@@ -166,7 +184,14 @@ function Invoke-Doctor {
 
   $resolvedCli = Resolve-CodexCliPath
   if ($resolvedCli) {
+    $ext = [System.IO.Path]::GetExtension($resolvedCli)
+    $typeNote = switch ($ext) {
+      ".exe" { "(native binary - best)" }
+      ".cmd" { "(batch wrapper - needs shell:true patch)" }
+      default { "(unknown type - may not work with spawn)" }
+    }
     Write-Host "`nResolved Codex CLI: $resolvedCli" -ForegroundColor Green
+    Write-Host "  Type: $typeNote"
   } else {
     Write-Host "`nResolved Codex CLI: ** NOT FOUND **" -ForegroundColor Red
     Write-Host "  Install with:  npm i -g @openai/codex" -ForegroundColor Yellow
