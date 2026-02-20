@@ -196,6 +196,33 @@ function Patch-Preload([string]$AppDir) {
   }
 }
 
+function Patch-MainSpawn([string]$AppDir) {
+  # Fix "spawn EFTYPE" on Windows when Codex CLI is a .cmd/.bat shim.
+  # Node's child_process.spawn() cannot execute .cmd files directly;
+  # it needs shell:true or cmd.exe /c. This patch adds shell:true
+  # conditionally on win32 when the executable path ends in .cmd/.bat.
+  $mainJs = Get-ChildItem -Path (Join-Path $AppDir ".vite\build") -Filter "main-*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $mainJs) { Write-Host "Warning: main-*.js not found, skipping spawn patch." -ForegroundColor Yellow; return }
+
+  $raw = Get-Content -Raw $mainJs.FullName
+
+  $oldSpawn = 'Dn.spawn(this.options.executablePath,this.options.args,{stdio:["pipe","pipe","pipe"],env:this.options.env})'
+  $newSpawn = 'Dn.spawn(this.options.executablePath,this.options.args,{stdio:["pipe","pipe","pipe"],env:this.options.env,shell:process.platform==="win32"&&/\.(cmd|bat)$/i.test(this.options.executablePath)})'
+
+  if ($raw.Contains($newSpawn)) {
+    Write-Host "Main spawn already patched." -ForegroundColor Cyan
+    return
+  }
+
+  if (-not $raw.Contains($oldSpawn)) {
+    Write-Host "Warning: spawn patch point not found in $($mainJs.Name). Codex may have updated its bundle format." -ForegroundColor Yellow
+    return
+  }
+
+  $raw = $raw.Replace($oldSpawn, $newSpawn)
+  Set-Content -NoNewline -Path $mainJs.FullName -Value $raw
+  Write-Host "Patched $($mainJs.Name): spawn now uses shell:true for .cmd/.bat on Windows." -ForegroundColor Green
+}
 
 function Ensure-GitOnPath() {
   $candidates = @(
@@ -292,6 +319,9 @@ if (-not $Reuse) {
 
 Write-Header "Patching preload"
 Patch-Preload $appDir
+
+Write-Header "Patching spawn for Windows .cmd/.bat support"
+Patch-MainSpawn $appDir
 
 Write-Header "Reading app metadata"
 $pkgPath = Join-Path $appDir "package.json"

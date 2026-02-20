@@ -77,6 +77,14 @@ Run this once (safe — only affects current terminal session):
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
+### `spawn EFTYPE` crash
+
+This error means Electron tried to spawn `codex.cmd` directly without a shell. The script automatically patches the bundled Electron main process to handle this. If you still see it:
+
+1. Delete the `work/` folder and re-run (ensures the patch is applied fresh)
+2. Run `.\scripts\run.ps1 -Doctor` to verify the CLI path
+3. If using `-Reuse`, try without it once to force re-patching
+
 ### PATH not refreshed after npm install
 
 If you just ran `npm i -g @openai/codex` but the script still cannot find Codex:
@@ -89,8 +97,9 @@ The script will:
 1. Extract the DMG to `work/`
 2. Unpack `app.asar` from the macOS app bundle
 3. Build Windows-compatible native modules (better-sqlite3, node-pty)
-4. Resolve the Codex CLI (`codex`, `codex.cmd`, or `codex.exe`)
-5. Launch the Electron app
+4. **Patch the bundled Electron code** to handle `.cmd`/`.bat` spawning on Windows
+5. Resolve the Codex CLI (`codex`, `codex.cmd`, or `codex.exe`)
+6. Launch the Electron app
 
 ## Notes
 
