@@ -9,10 +9,10 @@ if not exist "%SCRIPT%" (
 
 if "%~1"=="" (
   echo Usage:
-  echo   run.cmd
   echo   run.cmd -DmgPath .\Codex.dmg
+  echo   run.cmd -Doctor
   echo Optional:
-  echo   -WorkDir .\work  -CodexCliPath C:\path\to\codex.exe  -Reuse
+  echo   -WorkDir .\work  -CodexCliPath C:\path\to\codex.cmd  -Reuse  -NoLaunch
   exit /b 0
 )
 

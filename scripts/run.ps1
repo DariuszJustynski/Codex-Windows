@@ -3,7 +3,8 @@ param(
   [string]$WorkDir = (Join-Path $PSScriptRoot "..\work"),
   [string]$CodexCliPath,
   [switch]$Reuse,
-  [switch]$NoLaunch
+  [switch]$NoLaunch,
+  [switch]$Doctor
 )
 
 Set-StrictMode -Version Latest
@@ -52,7 +53,7 @@ function Resolve-7z([string]$BaseDir) {
 function Resolve-CodexCliPath([string]$Explicit) {
   if ($Explicit) {
     if (Test-Path $Explicit) { return (Resolve-Path $Explicit).Path }
-    throw "Codex CLI not found: $Explicit"
+    throw "Codex CLI not found at explicit path: $Explicit"
   }
 
   $envOverride = $env:CODEX_CLI_PATH
@@ -62,13 +63,31 @@ function Resolve-CodexCliPath([string]$Explicit) {
 
   $candidates = @()
 
-  try {
-    $whereExe = & where.exe codex.exe 2>$null
-    if ($whereExe) { $candidates += $whereExe }
-    $whereCmd = & where.exe codex 2>$null
-    if ($whereCmd) { $candidates += $whereCmd }
-  } catch {}
+  # 1. Get-Command handles PATHEXT natively (.exe, .cmd, .bat)
+  foreach ($name in @("codex", "codex.cmd", "codex.exe")) {
+    try {
+      $cmd = Get-Command $name -ErrorAction Stop
+      if ($cmd -and $cmd.Source) { $candidates += $cmd.Source }
+    } catch {}
+  }
 
+  # 2. where.exe as secondary lookup
+  foreach ($name in @("codex", "codex.cmd", "codex.exe")) {
+    try {
+      $found = & where.exe $name 2>$null
+      if ($found) { $candidates += $found }
+    } catch {}
+  }
+
+  # 3. Common npm global bin locations on Windows
+  $candidates += @(
+    (Join-Path $env:APPDATA "npm\codex.cmd"),
+    (Join-Path $env:APPDATA "npm\codex.exe"),
+    (Join-Path $env:LOCALAPPDATA "npm\codex.cmd"),
+    (Join-Path $env:LOCALAPPDATA "npm\codex.exe")
+  )
+
+  # 4. npm root -g vendor path (direct binary)
   try {
     $npmRoot = (& npm root -g 2>$null).Trim()
     if ($npmRoot) {
@@ -79,8 +98,12 @@ function Resolve-CodexCliPath([string]$Explicit) {
     }
   } catch {}
 
+  # Deduplicate and test
+  $candidates = $candidates | Where-Object { $_ } | Select-Object -Unique
+
   foreach ($c in $candidates) {
     if (-not $c) { continue }
+    # For .cmd wrappers, try to resolve the actual vendor binary first
     if ($c -match '\.cmd$' -and (Test-Path $c)) {
       try {
         $cmdDir = Split-Path $c -Parent
@@ -101,6 +124,62 @@ function Resolve-CodexCliPath([string]$Explicit) {
 
 function Write-Header([string]$Text) {
   Write-Host "`n=== $Text ===" -ForegroundColor Cyan
+}
+
+function Invoke-Doctor {
+  Write-Host "`n=== Codex-Windows Doctor ===" -ForegroundColor Cyan
+
+  Write-Host "`nPowerShell:      $($PSVersionTable.PSVersion)"
+
+  Write-Host "ExecutionPolicy (Process):     $(Get-ExecutionPolicy -Scope Process)"
+  Write-Host "ExecutionPolicy (CurrentUser): $(Get-ExecutionPolicy -Scope CurrentUser)"
+
+  $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+  Write-Host "Node:            $(if ($nodeCmd) { $nodeCmd.Source } else { '** NOT FOUND **' })"
+
+  $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+  Write-Host "NPM:             $(if ($npmCmd) { $npmCmd.Source } else { '** NOT FOUND **' })"
+
+  if ($npmCmd) {
+    try {
+      $prefix = & npm config get prefix 2>$null
+      Write-Host "NPM prefix:      $prefix"
+    } catch {
+      Write-Host "NPM prefix:      (could not determine)"
+    }
+  }
+
+  Write-Host "`nCodex CLI search results:"
+  foreach ($name in @("codex", "codex.cmd", "codex.exe")) {
+    Write-Host "  where.exe ${name}:"
+    try {
+      $result = & where.exe $name 2>$null
+      if ($result) {
+        foreach ($line in $result) { Write-Host "    $line" }
+      } else {
+        Write-Host "    (not found)"
+      }
+    } catch {
+      Write-Host "    (not found)"
+    }
+  }
+
+  $resolvedCli = Resolve-CodexCliPath
+  if ($resolvedCli) {
+    Write-Host "`nResolved Codex CLI: $resolvedCli" -ForegroundColor Green
+  } else {
+    Write-Host "`nResolved Codex CLI: ** NOT FOUND **" -ForegroundColor Red
+    Write-Host "  Install with:  npm i -g @openai/codex" -ForegroundColor Yellow
+    Write-Host "  Then restart your terminal." -ForegroundColor Yellow
+  }
+
+  $wslCmd = Get-Command wsl -ErrorAction SilentlyContinue
+  Write-Host "`nWSL:             $(if ($wslCmd) { $wslCmd.Source } else { 'not available' })"
+
+  $szCmd = Get-Command 7z -ErrorAction SilentlyContinue
+  Write-Host "7-Zip:           $(if ($szCmd) { $szCmd.Source } else { 'not in PATH (will auto-install)' })"
+
+  Write-Host "`n==============================" -ForegroundColor Cyan
 }
 
 function Patch-Preload([string]$AppDir) {
@@ -130,6 +209,12 @@ function Ensure-GitOnPath() {
   if ($env:PATH -notlike "*$gitDir*") {
     $env:PATH = "$gitDir;$env:PATH"
   }
+}
+
+# --- Doctor mode: print diagnostics and exit ---
+if ($Doctor) {
+  Invoke-Doctor
+  exit 0
 }
 
 Ensure-Command node
@@ -313,7 +398,26 @@ if (-not $NoLaunch) {
   Write-Header "Resolving Codex CLI"
   $cli = Resolve-CodexCliPath $CodexCliPath
   if (-not $cli) {
-    throw "codex.exe not found."
+    throw @"
+
+Codex CLI not found.
+
+WHY: On Windows, npm installs Codex as codex.cmd (not codex.exe).
+     Your PATH may also need refreshing after install.
+
+FIX:
+  1. npm i -g @openai/codex
+  2. Close and reopen your terminal (to refresh PATH)
+  3. Run:  .\scripts\run.ps1 -Doctor
+
+DIAGNOSTICS (run these manually):
+  where.exe codex
+  where.exe codex.cmd
+  where.exe codex.exe
+
+If Codex is installed in a non-standard location, use:
+  .\scripts\run.ps1 -CodexCliPath "C:\path\to\codex.cmd"
+"@
   }
 
   Write-Header "Launching Codex"
