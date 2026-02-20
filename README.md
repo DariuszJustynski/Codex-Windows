@@ -1,6 +1,6 @@
-# Codex DMG -> Windows
+# Codex-Windows
 
-A **Windows-friendly** runner that extracts the macOS Codex DMG and runs the Electron app on Windows. It unpacks `app.asar`, swaps mac-only native modules for Windows builds, and launches the app with a compatible Electron runtime.
+**Windows-friendly Codex CLI bootstrapper** — extracts the macOS Codex DMG and runs the Electron app natively on Windows. Handles all Windows-specific quirks: `codex.cmd` vs `codex.exe`, `spawn EFTYPE`, ExecutionPolicy, native module rebuilds.
 
 It **does not** ship OpenAI binaries or assets; you must supply your own DMG and install the Codex CLI.
 
@@ -11,9 +11,11 @@ It **does not** ship OpenAI binaries or assets; you must supply your own DMG and
 - Codex CLI installed globally (`npm i -g @openai/codex`)
 - 7-Zip (`7z` in PATH) — auto-installed via winget or portable download if missing
 
-> **Windows reality:** `npm i -g @openai/codex` typically installs `codex.cmd` (not `codex.exe`). This script handles both — no workaround needed.
+> **Windows reality:** `npm i -g @openai/codex` installs `codex.cmd` (not `codex.exe`). The script finds the native binary automatically — no workaround needed.
 
 ## Quick Start
+
+### First time setup
 
 ```powershell
 # 1. Allow scripts for this session (safe — process-scoped only)
@@ -25,20 +27,17 @@ npm i -g @openai/codex
 # 3. Run diagnostics to verify everything is set up
 .\scripts\run.ps1 -Doctor
 
-# 4. Run the main flow (place Codex.dmg in repo root first)
+# 4. Place Codex.dmg in the repo root, then run:
 .\scripts\run.ps1
 ```
 
-Or explicitly:
+### After first setup
 
+**Double-click `Launch-Codex.cmd`** — that's it. It reuses the already-extracted app and launches Codex instantly.
+
+Or from terminal:
 ```powershell
-.\scripts\run.ps1 -DmgPath .\Codex.dmg
-```
-
-Or use the shortcut launcher:
-
-```cmd
-run.cmd -DmgPath .\Codex.dmg
+.\scripts\run.ps1 -Reuse
 ```
 
 ## Parameters
@@ -48,9 +47,17 @@ run.cmd -DmgPath .\Codex.dmg
 | `-DmgPath` | string | Path to the Codex `.dmg` file (auto-detected from repo root) |
 | `-WorkDir` | string | Working directory for extracted files (default: `.\work`) |
 | `-CodexCliPath` | string | Explicit path to `codex.cmd` or `codex.exe` (auto-resolved if omitted) |
-| `-Reuse` | switch | Skip extraction if `work/` already exists |
+| `-Reuse` | switch | Skip extraction if `work/` already exists (used by `Launch-Codex.cmd`) |
 | `-NoLaunch` | switch | Extract and build only, do not launch Electron |
 | `-Doctor` | switch | Print diagnostics and exit (does not require DMG or Codex CLI) |
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `Launch-Codex.cmd` | **Double-click launcher** — runs Codex with `-Reuse` (no re-extraction) |
+| `run.cmd` | CLI launcher with argument pass-through |
+| `scripts/run.ps1` | Main PowerShell script (extraction, patching, launching) |
 
 ## Troubleshooting
 
@@ -77,12 +84,17 @@ Run this once (safe — only affects current terminal session):
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
+Or just use `Launch-Codex.cmd` which bypasses this automatically.
+
 ### `spawn EFTYPE` crash
 
-This error means Electron tried to spawn `codex.cmd` directly without a shell. The script automatically patches the bundled Electron main process to handle this. If you still see it:
+This error means Electron tried to spawn a non-executable file (`.ps1` or `.cmd` without shell). The script automatically:
+- Resolves the native `codex.exe` binary (best path)
+- Patches the Electron bundle to handle `.cmd` fallback
 
-1. Delete the `work/` folder and re-run (ensures the patch is applied fresh)
-2. Run `.\scripts\run.ps1 -Doctor` to verify the CLI path
+If you still see it:
+1. Delete the `work/` folder and re-run (ensures a fresh patch)
+2. Run `.\scripts\run.ps1 -Doctor` to verify the CLI path shows `(native binary - best)`
 3. If using `-Reuse`, try without it once to force re-patching
 
 ### PATH not refreshed after npm install
@@ -93,13 +105,21 @@ If you just ran `npm i -g @openai/codex` but the script still cannot find Codex:
 
 ## How It Works
 
-The script will:
-1. Extract the DMG to `work/`
+1. Extract the DMG to `work/` using 7-Zip
 2. Unpack `app.asar` from the macOS app bundle
 3. Build Windows-compatible native modules (better-sqlite3, node-pty)
-4. **Patch the bundled Electron code** to handle `.cmd`/`.bat` spawning on Windows
-5. Resolve the Codex CLI (`codex`, `codex.cmd`, or `codex.exe`)
+4. **Patch the Electron bundle** to handle `.cmd`/`.bat` spawning on Windows
+5. **Resolve the Codex CLI** — finds the native PE binary first, falls back to `.cmd`
 6. Launch the Electron app
+
+### Platform status
+
+| Platform | Status |
+|---|---|
+| Windows 10/11 (x64) | Fully supported |
+| Windows (ARM64) | Should work (untested) |
+| macOS | Use the official DMG directly |
+| Linux / WSL | Not yet supported by this fork |
 
 ## Notes
 

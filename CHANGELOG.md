@@ -1,17 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0] - 2025-02-21
+
+First release of the Windows-friendly fork. Codex runs natively on Windows without manual workarounds.
 
 ### Fixed
-- **Codex CLI resolution on Windows**: The script no longer requires `codex.exe` specifically. It now resolves `codex`, `codex.cmd`, and `codex.exe` using `Get-Command`, `where.exe`, and common npm global install paths (`%APPDATA%\npm\`, `%LOCALAPPDATA%\npm\`). This fixes the hard failure most Windows users hit after `npm i -g @openai/codex`.
-- **`spawn EFTYPE` crash on Windows**: Two issues caused this crash:
-  1. The CLI resolver returned `codex.ps1` (PowerShell preferred `.ps1` over `.cmd` when searching by bare name `codex`). Node.js cannot spawn `.ps1` files. Fixed by searching only for `.exe` and `.cmd` candidates, and prioritizing the native vendor binary (`codex.exe`) over shell wrappers.
-  2. If the native binary is unavailable and `codex.cmd` is used as fallback, the Electron main process needs `shell: true` to spawn it. `Patch-MainSpawn` patches the bundled JS to add this conditionally for `.cmd`/`.bat` files on Windows.
+- **Codex CLI resolution on Windows**: The script no longer requires `codex.exe` specifically. It resolves the native vendor binary first (`codex-win32-x64/.../codex.exe`), then falls back to `codex.cmd`, using `Get-Command`, `where.exe`, and common npm global paths (`%APPDATA%\npm\`, `%LOCALAPPDATA%\npm\`).
+- **`spawn EFTYPE` crash on Windows**: Two root causes fixed:
+  1. PowerShell's `Get-Command "codex"` returned `codex.ps1` (not spawnable by Node.js). Resolver now searches only `.exe` and `.cmd` candidates.
+  2. If `codex.cmd` is used as fallback, `Patch-MainSpawn` patches the bundled Electron JS to add `shell: true` conditionally for `.cmd`/`.bat` files on Windows.
 
 ### Added
-- **`-Doctor` diagnostics mode**: Run `.\scripts\run.ps1 -Doctor` to print PowerShell version, execution policy, Node/npm availability, npm prefix, Codex CLI search results, and WSL/7-Zip status. Works even if Codex or Node are not installed.
+- **`Launch-Codex.cmd`**: Double-click desktop launcher that runs Codex with `-Reuse` (no re-extraction needed after first setup).
+- **`-Doctor` diagnostics mode**: Run `.\scripts\run.ps1 -Doctor` to print PowerShell version, execution policy, Node/npm availability, npm prefix, Codex CLI search results, resolved binary type, and WSL/7-Zip status.
+- **Actionable error messages**: When Codex CLI is not found, the error explains *why* it fails on Windows and gives step-by-step fix instructions with diagnostic commands.
 
 ### Improved
-- **Error messages**: When Codex CLI cannot be found, the error now explains *why* (npm installs `codex.cmd` on Windows, PATH may need refreshing) and gives step-by-step fix instructions with copy-pasteable diagnostic commands.
-- **README**: Added Quick Start with safe execution policy snippet, parameter reference table, and troubleshooting section for common Windows issues.
-- **`run.cmd`**: Updated usage help to show `-Doctor` flag.
+- **README**: Complete rewrite with Quick Start, parameter table, file reference, troubleshooting for 4 common issues, platform status table.
+- **`run.cmd`**: Updated usage help to show `-Doctor` and all available flags.
