@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.0] - 2025-02-21
+
+### Added
+- **`SECURITY.md`**: Granite Core security model with threat model, architecture design, and sandbox roadmap covering Electron hardening, filesystem isolation, spawn policy, execution modes, and secrets handling.
+- **Roadmap in README**: Actionable TODO checklist with 15 items across 3 areas (sandbox model, sensitive data encapsulation, execution modes & auditability), plus a PR plan mapping each area to a focused, independently-mergeable pull request.
+
 ## [1.0.0] - 2025-02-21
 
 First release of the Windows-friendly fork. Codex runs natively on Windows without manual workarounds.
